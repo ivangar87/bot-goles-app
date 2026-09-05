@@ -1,260 +1,207 @@
 import math
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import requests
 import streamlit as st
 
 # ==========================================
 # 1. CONFIGURACIÓN GENERAL Y APIS
 # ==========================================
-# Streamlit leerá las llaves de los Secrets configurados en la plataforma
-ODDS_API_KEY = st.secrets.get("ODDS_API_KEY", "78eaa8461c2a397cd8e2de084867512b")
-FOOTBALL_DATA_API_KEY = st.secrets.get("FOOTBALL_DATA_API_KEY", "fbba36f8cc0f4baf9481b1f6aa5a489c")
+ODDS_API_KEY = st.secrets.get("ODDS_API_KEY", "")
+FOOTBALL_DATA_API_KEY = st.secrets.get("FOOTBALL_DATA_API_KEY", "")
 BANKROLL_TOTAL = 100000
 
 LIGAS = {
-    "soccer_epl": {"nombre": "Premier League (Inglaterra)", "code": "PL"},
-    "soccer_spain_la_liga": {"nombre": "LaLiga (España)", "code": "PD"},
-    "soccer_italy_serie_a": {"nombre": "Serie A (Italia)", "code": "SA"},
-    "soccer_germany_bundesliga": {"nombre": "Bundesliga (Alemania)", "code": "BL1"},
-    "soccer_france_ligue_one": {"nombre": "Ligue 1 (Francia)", "code": "FL1"},
-    "soccer_uefa_champs_league": {"nombre": "UEFA Champions League", "code": "CL"},
-    "soccer_netherlands_eredivisie": {"nombre": "Eredivisie (Países Bajos)", "code": "DED"},
-    "soccer_efl_champ": {"nombre": "Championship (Inglaterra)", "code": "ELC"},
-    "soccer_portugal_primeira_liga": {"nombre": "Primeira Liga (Portugal)", "code": "PPD"},
-    "soccer_belgium_first_div": {"nombre": "Pro League (Bélgica)", "code": "BJL"},
-    "soccer_brazil_campeonato": {"nombre": "Brasileirão (Brasil)", "code": "BSA"},
-    "soccer_argentina_primera_division": {"nombre": "Liga Profesional (Argentina)", "code": "CLI"}
+    "soccer_argentina_primera_division": {
+        "nombre": "Liga Profesional (Argentina)",
+        "football_data_code": "CLI",
+    },
+    "soccer_saudi_pro_league": {
+        "nombre": "Saudi Pro League (Arabia Saudita)",
+        "football_data_code": "SAU",
+    },
+    "soccer_japan_j_league": {
+        "nombre": "J1 League (Japón)",
+        "football_data_code": "JPN",
+    },
 }
 
-PROMEDIOS_LIGAS = {
-    "soccer_epl": {"home": 1.55, "away": 1.25},
-    "soccer_spain_la_liga": {"home": 1.45, "away": 1.10},
-    "soccer_italy_serie_a": {"home": 1.40, "away": 1.15},
-    "soccer_germany_bundesliga": {"home": 1.60, "away": 1.30},
-    "soccer_france_ligue_one": {"home": 1.40, "away": 1.10},
-    "soccer_uefa_champs_league": {"home": 1.55, "away": 1.25},
-    "soccer_netherlands_eredivisie": {"home": 1.65, "away": 1.35},
-    "soccer_efl_champ": {"home": 1.40, "away": 1.15},
-    "soccer_portugal_primeira_liga": {"home": 1.45, "away": 1.10},
-    "soccer_belgium_first_div": {"home": 1.55, "away": 1.25},
-    "soccer_brazil_campeonato": {"home": 1.35, "away": 1.00},
-    "soccer_argentina_primera_division": {"home": 1.25, "away": 0.90}
-}
-
-CACHE_ESTADISTICAS = {}
-
 # ==========================================
-# 2. FUNCIONES DE CÁLKULO Y DATOS
+# 2. FUNCIONES DE CONEXIÓN Y DATOS
 # ==========================================
-def limpiar_texto(texto):
-    texto = texto.lower()
-    reemplazos = ["fc", "cf", "cd", "ud", "rcd", "afc", "sc", "club", "atletico", "real"]
-    palabras = re.sub(r"[^a-z0-9 ]", "", texto).split()
-    palabras_filtradas = [p for p in palabras if p not in reemplazos]
-    return " ".join(palabras_filtradas) if palabras_filtradas else texto
-
-def cargar_tabla_posiciones(league_code):
-    if league_code in CACHE_ESTADISTICAS:
-        return CACHE_ESTADISTICAS[league_code]
-
-    url = f"https://api.football-data.org/v4/competitions/{league_code}/standings"
-    headers = {"X-Auth-Token": FOOTBALL_DATA_API_KEY}
-
-    try:
-        res = requests.get(url, headers=headers)
-        if res.status_code == 200:
-            data = res.json()
-            tabla_equipos = {}
-            standings = data.get("standings", [])
-            if standings:
-                table = standings[0].get("table", [])
-                for row in table:
-                    nombre = row["team"]["name"]
-                    nombre_clean = limpiar_texto(nombre)
-                    pj_total = max(1, row.get("playedGames", 1))
-                    home_data = row.get("home", {})
-                    away_data = row.get("away", {})
-                    pj_home = max(1, home_data.get("played", max(1, pj_total // 2)))
-                    pj_away = max(1, away_data.get("played", max(1, pj_total // 2)))
-                    
-                    gf_home_raw = home_data.get("goalsFor", 0)
-                    gc_home_raw = home_data.get("goalsAgainst", 0)
-                    gf_away_raw = away_data.get("goalsFor", 0)
-                    gc_away_raw = away_data.get("goalsAgainst", 0)
-
-                    gf_home = gf_home_raw / pj_home if gf_home_raw > 0 else 1.45
-                    gc_home = gc_home_raw / pj_home if gc_home_raw > 0 else 1.15
-                    gf_away = gf_away_raw / pj_away if gf_away_raw > 0 else 1.15
-                    gc_away = gc_away_raw / pj_away if gc_away_raw > 0 else 1.45
-
-                    tabla_equipos[nombre_clean] = {
-                        "gf_home": max(0.5, gf_home),
-                        "gc_home": max(0.5, gc_home),
-                        "gf_away": max(0.5, gf_away),
-                        "gc_away": max(0.5, gc_away),
-                    }
-            CACHE_ESTADISTICAS[league_code] = tabla_equipos
-            return tabla_equipos
-    except Exception:
-        pass
-
-    CACHE_ESTADISTICAS[league_code] = {}
-    return {}
-
-def obtener_datos_equipo_dinamico(nombre_equipo, league_code, prom_liga):
-    tabla_liga = cargar_tabla_posiciones(league_code)
-    nombre_clean = limpiar_texto(nombre_equipo)
-    for eq_nombre, stats in tabla_liga.items():
-        if eq_nombre in nombre_clean or nombre_clean in eq_nombre:
-            return stats, True
-    return {
-        "gf_home": prom_liga["home"],
-        "gc_home": prom_liga["away"],
-        "gf_away": prom_liga["away"],
-        "gc_away": prom_liga["home"],
-    }, False
-
-def calcular_lambdas(local, visitante, sport_key, league_code):
-    prom_liga = PROMEDIOS_LIGAS.get(sport_key, {"home": 1.45, "away": 1.15})
-    eq_local, enc_loc = obtener_datos_equipo_dinamico(local, league_code, prom_liga)
-    eq_vis, enc_vis = obtener_datos_equipo_dinamico(visitante, league_code, prom_liga)
-
-    avg_home = prom_liga["home"]
-    avg_away = prom_liga["away"]
-
-    l_local = (eq_local["gf_home"] / avg_home) * (eq_vis["gc_away"] / avg_home) * avg_home
-    l_vis = (eq_vis["gf_away"] / avg_away) * (eq_local["gc_home"] / avg_away) * avg_away
-
-    return min(2.80, max(0.40, l_local)), min(2.80, max(0.40, l_vis)), (enc_loc and enc_vis)
-
-def poisson(k, lambd):
-    return (math.pow(lambd, k) * math.exp(-lambd)) / math.factorial(k)
-
-def calcular_probabilidades_multilinea(l_local, l_vis):
-    prob_ou = {"Más de 1.5": 0.0, "Menos de 1.5": 0.0, "Más de 2.5": 0.0, "Menos de 2.5": 0.0, "Más de 3.5": 0.0, "Menos de 3.5": 0.0}
-    for i in range(8):
-        for j in range(8):
-            p = poisson(i, l_local) * poisson(j, l_vis)
-            goles = i + j
-            if goles > 1.5: prob_ou["Más de 1.5"] += p
-            else: prob_ou["Menos de 1.5"] += p
-            if goles > 2.5: prob_ou["Más de 2.5"] += p
-            else: prob_ou["Menos de 2.5"] += p
-            if goles > 3.5: prob_ou["Más de 3.5"] += p
-            else: prob_ou["Menos de 3.5"] += p
-    return prob_ou
-
-def obtener_cuotas_goles(sport_key):
+def obtener_cuotas(sport_key):
     url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
-    params = {"apiKey": ODDS_API_KEY, "regions": "eu,uk", "markets": "totals", "oddsFormat": "decimal", "dateFormat": "iso"}
+    params = {
+        "apiKey": ODDS_API_KEY,
+        "regions": "eu,uk",
+        "markets": "totals,h2h",
+        "oddsFormat": "decimal",
+    }
     try:
-        res = requests.get(url, params=params)
-        if res.status_code == 200:
-            return res.json()
-    except Exception:
-        pass
+        response = requests.get(url, params=params, timeout=12)
+        if response.status_code == 200:
+            return response.json()
+    except Exception as e:
+        st.error(f"Error al conectar con The Odds API: {e}")
     return []
 
-def calcular_kelly_fraccionado(prob, cuota, fraccion=0.25):
-    b = cuota - 1
-    p = prob
-    q = 1 - p
-    f_kelly = (b * p - q) / b
-    return max(0, f_kelly * fraccion) * 100
-
-def analizar_cuotas_goles(partido, prob_ou):
-    if not partido.get("bookmakers"):
-        return None, []
-    casa = partido["bookmakers"][0]
-    mercados = casa.get("markets", [])
-    value_bets = []
-    nombre_casa = re.sub(r"\s*\([A-Z]{2}\)", "", casa["title"])
-    lineas_soportadas = [1.5, 2.5, 3.5]
-
-    for m in mercados:
-        if m["key"] == "totals":
-            for outcome in m["outcomes"]:
-                name = outcome["name"]
-                point = outcome.get("point")
-                price = outcome["price"]
-                if point in lineas_soportadas:
-                    tipo_str = "Más de" if name == "Over" else "Menos de"
-                    key_lookup = f"{tipo_str} {point}"
-                    prob_est = prob_ou.get(key_lookup, 0)
-                    if prob_est > 0:
-                        ev = (prob_est * price) - 1
-                        # Filtro flexible a 0.0 para ver los partidos disponibles
-                        if 0.0 < ev < 0.35:
-                            pct_stake = calcular_kelly_fraccionado(prob_est, price)
-                            value_bets.append({
-                                "categoria": f"Línea de Goles ({tipo_str} {point})",
-                                "mercado": f"{tipo_str} {point} Goles",
-                                "cuota": price,
-                                "prob_est": prob_est * 100,
-                                "ev": ev * 100,
-                                "stake_pct": pct_stake,
-                                "monto": BANKROLL_TOTAL * (pct_stake / 100),
-                            })
-    return nombre_casa, value_bets
+def obtener_estadisticas_football_data(competition_code):
+    if not FOOTBALL_DATA_API_KEY:
+        return {}
+    url = f"https://api.football-data.org/v4/competitions/{competition_code}/standings"
+    headers = {"X-Auth-Token": FOOTBALL_DATA_API_KEY}
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            standings = data.get("standings", [])
+            for st_block in standings:
+                if st_block.get("type") == "TOTAL":
+                    tabla = {}
+                    for row in st_block.get("table", []):
+                        team_name = row.get("team", {}).get("name", "")
+                        played = row.get("playedGames", 1)
+                        goals_for = row.get("goalsFor", 0)
+                        goals_against = row.get("goalsAgainst", 0)
+                        tabla[team_name] = {
+                            "gf_avg": goals_for / max(played, 1),
+                            "ga_avg": goals_against / max(played, 1),
+                        }
+                    return tabla
+    except Exception:
+        pass
+    return {}
 
 # ==========================================
-# 3. INTERFAZ STREAMLIT
+# 3. MOTOR DE CÁLCULO POISSON Y VALOR +EV
 # ==========================================
-st.set_page_config(page_title="Scanner ValueBet (+EV)", page_icon="⚽", layout="centered")
+def poisson_prob(lmbda, k):
+    try:
+        return (math.exp(-lmbda) * (lmbda**k)) / math.factorial(k)
+    except Exception:
+        return 0.0
 
-st.title("⚽ Scanner de Apuestas ValueBet (+EV)")
-st.markdown("Modelo estadístico de Poisson enfocado en la Línea de Goles (Filtro flexible activo)")
+def calcular_probabilidades_partido(xg_home, xg_away):
+    max_goles = 7
+    prob_mas_1_5 = 0.0
+    prob_mas_2_5 = 0.0
+    prob_mas_3_5 = 0.0
 
-if st.button("🚀 Escanear Mercado", type="primary", use_container_width=True):
-    with st.spinner("Escaneando ligas y calculando valor..."):
-        todas_las_oportunidades = []
-        tz_local = timezone(timedelta(hours=-5))
+    for gh in range(max_goles + 1):
+        p_h = poisson_prob(xg_home, gh)
+        for ga in range(max_goles + 1):
+            p_a = poisson_prob(xg_away, ga)
+            p_total = p_h * p_a
+            total_goles = gh + ga
+            
+            if total_goles > 1.5:
+                prob_mas_1_5 += p_total
+            if total_goles > 2.5:
+                prob_mas_2_5 += p_total
+            if total_goles > 3.5:
+                prob_mas_3_5 += p_total
 
-        for sport_key, config in LIGAS.items():
-            nombre_liga = config["nombre"]
-            league_code = config["code"]
-            partidos = obtener_cuotas_goles(sport_key)
+    return {
+        1.5: prob_mas_1_5,
+        2.5: prob_mas_2_5,
+        3.5: prob_mas_3_5,
+    }
 
-            if not partidos:
+# ==========================================
+# 4. INTERFAZ DE USUARIO EN STREAMLIT
+# ==========================================
+st.set_page_config(
+    page_title="Scanner +EV Goles Avanzado",
+    page_icon="⚽",
+    layout="wide"
+)
+
+st.title("⚽ Scanner +EV Goles (Modelo Poisson Avanzado)")
+st.markdown("Análisis matemático de probabilidades y valor esperado (+EV) para mercados de Goles en Sudamérica y Asia.")
+
+# Sidebar para controles de usuario
+st.sidebar.header("⚙️ Configuración del Escáner")
+filtro_ev = st.sidebar.slider("Filtro mínimo de EV (%)", min_value=0.0, max_value=20.0, value=0.0, step=0.5) / 100.0
+
+with st.spinner("Analizando mercados en tiempo real..."):
+    total_encontrados = 0
+
+    for sport_key, info in LIGAS.items():
+        st.subheader(f"🏆 {info['nombre']}")
+        eventos = obtener_cuotas(sport_key)
+        
+        if not eventos:
+            st.info(f"No hay eventos disponibles actualmente para {info['nombre']}.")
+            continue
+
+        stats_fd = obtener_estadisticas_football_data(info["football_data_code"])
+
+        for evento in eventos:
+            home = evento.get("home_team", "")
+            away = evento.get("away_team", "")
+            commence_time = evento.get("commence_time", "")
+
+            try:
+                dt = datetime.strptime(commence_time, "%Y-%m-%dT%H:%M:%SZ")
+                dt_local = dt - timedelta(hours=5)
+                fecha_str = dt_local.strftime("%d/%m/%Y %I:%M %p")
+            except:
+                fecha_str = commence_time
+
+            # Obtener xG basados en estadísticas o valores por defecto
+            h_stat = stats_fd.get(home, {"gf_avg": 1.4, "ga_avg": 1.1})
+            a_stat = stats_fd.get(away, {"gf_avg": 1.2, "ga_avg": 1.3})
+
+            xg_home = (h_stat["gf_avg"] + a_stat["ga_avg"]) / 2
+            xg_away = (a_stat["gf_avg"] + h_stat["ga_avg"]) / 2
+            xg_home = max(0.5, min(xg_home, 3.5))
+            xg_away = max(0.5, min(xg_away, 3.5))
+
+            probs = calcular_probabilidades_partido(xg_home, xg_away)
+
+            bookmakers = evento.get("bookmakers", [])
+            if not bookmakers:
                 continue
 
-            for p in partidos:
-                local = p["home_team"]
-                visitante = p["away_team"]
-                fecha_inicio = p.get("commence_time", "")
+            # Buscar mercados de totales en las casas de apuestas
+            cuotas_mercado = {}
+            for bookmaker in bookmakers:
+                for market in bookmaker.get("markets", []):
+                    if market.get("key") == "totals":
+                        for outcome in market.get("outcomes", []):
+                            if "Over" in outcome.get("name", ""):
+                                punto = outcome.get("point")
+                                precio = outcome.get("price")
+                                if punto in [1.5, 2.5, 3.5]:
+                                    if punto not in cuotas_mercado:
+                                        cuotas_mercado[punto] = precio
 
-                l_local, l_vis, _ = calcular_lambdas(local, visitante, sport_key, league_code)
-                prob_ou = calcular_probabilidades_multilinea(l_local, l_vis)
-                casa_nombre, value_bets = analizar_cuotas_goles(p, prob_ou)
+            # Evaluar cada línea de goles
+            for linea in [1.5, 2.5, 3.5]:
+                if linea in cuotas_mercado and linea in probs:
+                    cuota = cuotas_mercado[linea]
+                    prob_poisson = probs[linea]
+                    
+                    if prob_poisson > 0:
+                        ev = (prob_poisson * cuota) - 1
+                        
+                        if ev >= filtro_ev:
+                            total_encontrados += 1
+                            color_borde = "#4CAF50" if ev > 0.05 else "#FF9800"
+                            
+                            st.markdown(
+                                f"""
+                                <div style="background-color: #1a1a1a; padding: 14px; border-radius: 10px; margin-bottom: 12px; border-left: 5px solid {color_borde}; color: #ffffff;">
+                                    <strong>[{info['nombre']}] {home} vs {away}</strong><br>
+                                    <small style="color: #b0b0b0;">🕒 {fecha_str} | xG Est. (Local: {xg_home:.2f} | Visita: {xg_away:.2f})</small><br>
+                                    👉 <strong>Más de {linea} Goles</strong> a cuota <code>{cuota:.2f}</code><br>
+                                    📈 <strong>Valor (+EV):</strong> <span style="color: #4CAF50; font-weight: bold;">{ev*100:+.1f}%</span> | <strong>Prob. Poisson:</strong> <code>{prob_poisson*100:.1f}%</code><br>
+                                    💡 <em>Sugerencia analítica: Oportunidad detectada en línea de {linea} goles</em>
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
 
-                for vb in value_bets:
-                    try:
-                        dt_utc = datetime.fromisoformat(fecha_inicio.replace("Z", "+00:00"))
-                        dt_loc = dt_utc.astimezone(tz_local)
-                    except Exception:
-                        dt_loc = datetime.now(tz_local)
-
-                    todas_las_oportunidades.append({
-                        "liga": nombre_liga,
-                        "partido": f"{local} vs {visitante}",
-                        "dt_local": dt_loc,
-                        **vb,
-                        "casa": casa_nombre,
-                        "lambda_local": l_local,
-                        "lambda_vis": l_vis,
-                    })
-
-        if todas_las_oportunidades:
-            st.success(f"¡Se encontraron {len(todas_las_oportunidades)} opciones en el mercado!")
-            for op in todas_las_oportunidades:
-                with st.container():
-                    st.markdown(f"**[{op['liga']}] {op['partido']}**")
-                    st.caption(f"🕒 {op['dt_local'].strftime('%d/%m/%Y %I:%M %p')} | Casa: {op['casa']}")
-                    st.info(f"👉 **{op['mercado']}** @ **{op['cuota']:.2f}**\n\n"
-                            f"📈 Valor (+EV): `+{op['ev']:.1f}%` | Prob. Est: `{op['prob_est']:.1f}%`\n\n"
-                            f"💰 Stake Sugerido: `{op['stake_pct']:.2f}%` (`${op['monto']:,.0f}`)")
-                    st.divider()
-        else:
-            st.warning("No se encontraron oportunidades en este momento, pero la conexión con la API y los créditos funcionan perfectamente.")
+    if total_encontrados == 0:
+        st.warning("No se encontraron apuestas que superen el filtro de EV actual. Intenta ajustar el deslizador en la barra lateral.")
